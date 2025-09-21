@@ -59,27 +59,57 @@ export function GuardState<T>(props: Props<T>) {
       lastRef.current = now;
 
       if (waitTime <= 0) {
-        await onGuard(newValue, value!);
+        // 添加超时保护，防止长时间阻塞
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error("Operation timeout")), 5000);
+        });
+
+        try {
+          await Promise.race([
+            onGuard(newValue, value!),
+            timeoutPromise
+          ]);
+        } catch (err: any) {
+          // 确保在错误情况下正确释放锁
+          onChange(saveRef.current!);
+          onCatch(err);
+          throw err; // 重新抛出错误以便外层catch处理
+        }
       } else {
         // debounce guard
         clearTimeout(timeRef.current);
 
         timeRef.current = setTimeout(async () => {
           try {
-            await onGuard(newValue, saveRef.current!);
+            const timeoutPromise = new Promise<never>((_, reject) => {
+              setTimeout(() => reject(new Error("Operation timeout")), 5000);
+            });
+
+            await Promise.race([
+              onGuard(newValue, saveRef.current!),
+              timeoutPromise
+            ]);
           } catch (err: any) {
             // 状态回退
             onChange(saveRef.current!);
             onCatch(err);
+          } finally {
+            // 确保延迟操作也能正确释放锁
+            lockRef.current = false;
           }
         }, waitTime);
+
+        // 对于延迟操作，不在这里释放锁
+        return;
       }
     } catch (err: any) {
       // 状态回退
       onChange(saveRef.current!);
       onCatch(err);
+    } finally {
+      // 确保锁总是被释放
+      lockRef.current = false;
     }
-    lockRef.current = false;
   };
   return cloneElement(children, childProps);
 }
